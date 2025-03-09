@@ -1,34 +1,69 @@
+import mimetypes
 import re
 import time
-import httpx
 import scrapy
 import json
 import os
 
 
-class PipelinesSpider(scrapy.Spider):
-    name = "pipelines"
+class BWPipelinesSpider(scrapy.Spider):
+    """
+    Spider for scraping and downloading files from bwpipelines.com.
+
+    This spider crawls through paginated tables containing PDF and Excel files,
+    downloads them, and stores metadata in a JSON file. It handles pagination,
+    file downloads with proper delays, and maintains a structured record of all
+    downloaded content.
+
+    Attributes:
+        name (str): Identifier for the spider
+        allowed_domains (list): List of domains the spider is allowed to crawl
+        start_urls (list): Initial URL to begin crawling
+        output_json_file (str): Path where metadata JSON will be saved
+        download_folder (str): Directory where downloaded files are stored
+        page_index (int): Current page being processed
+    """
+
+    name = "bwpipelines"
     allowed_domains = ["infopost.bwpipelines.com"]
     start_urls = [
         "https://infopost.bwpipelines.com/Posting/default.aspx?Mode=Display&Id=11&tspid=1"
     ]
     output_json_file = "metadata.json"
     download_folder = "downloads"
-    page_index = 0
+    page_index = 1
 
     def __init__(self, from_page=2, to_page=3, *args, **kwargs):
+        """
+        Initialize the spider with page range configuration and setup.
+
+        Args:
+            from_page (int, optional): Starting page number for crawling. Defaults to 2.
+            to_page (int, optional): Ending page number for crawling. Defaults to 3.
+            *args: Additional positional arguments passed to parent class
+            **kwargs: Additional keyword arguments passed to parent class
+        """
         super().__init__(*args, **kwargs)
         self.from_page = int(from_page) if from_page else 2
-        self.to_page = int(to_page) if to_page else 3  # Default to 3
+        self.to_page = int(to_page) if to_page else 3
 
-        self.download_folder = "downloads"
         os.makedirs(self.download_folder, exist_ok=True)
 
         self.metadata = []
-        self.client = httpx.AsyncClient()
 
     def parse(self, response):
-        """Parse the first page and extract table data."""
+        """
+        Parse each page and process table data for downloads.
+
+        Extracts hidden form inputs, processes table rows to gather PDF and Excel
+        file information, triggers file downloads, and handles pagination.
+
+        Args:
+            response (scrapy.http.Response): Response object containing page HTML
+
+        Yields:
+            scrapy.FormRequest: Requests for file downloads and next page navigation
+        """
 
         hidden_inputs = response.xpath("//input[@type='hidden']")
         form_data = {
@@ -36,11 +71,10 @@ class PipelinesSpider(scrapy.Spider):
             for field in hidden_inputs
         }
 
-        table_rows = response.xpath(
-            "//table[@id='dgITMatrix']/tr[starts-with(@id, 'dgITMatrix_')]"
-        )
-
         if self.from_page <= self.page_index < self.to_page:
+            table_rows = response.xpath(
+                "//table[@id='dgITMatrix']/tr[starts-with(@id, 'dgITMatrix_')]"
+            )
 
             for index, row in enumerate(table_rows, start=1):
                 pdf_link = row.xpath(".//td[1]//a/@href").get()
@@ -71,8 +105,7 @@ class PipelinesSpider(scrapy.Spider):
 
                 self.metadata.append(entry)
 
-                # Download PDF (if available)
-                if pdf_link:
+                if excel_link:
                     time.sleep(5)  # Enzforce 5-second delay before download
                     yield scrapy.FormRequest(
                         url=response.url,
@@ -85,8 +118,7 @@ class PipelinesSpider(scrapy.Spider):
                         meta={"file_name": excel_name},
                     )
 
-                # Download Excel (if available)
-                if excel_link:
+                if pdf_link:
                     time.sleep(5)  # Enforce 5-second delay before download
                     yield scrapy.FormRequest(
                         url=response.url,
@@ -116,11 +148,43 @@ class PipelinesSpider(scrapy.Spider):
         )
 
     def _download_file(self, response):
-        """Download files (PDF/Excel) and save them locally, ensuring a valid filename."""
-        file_name = response.meta.get("file_name", "downloaded_file")
+        """
+        Handle file download and save to local storage.
 
-        # Remove invalid characters (e.g., `/`, `\`, `:`)
+        Processes response headers to determine filename and content type,
+        sanitizes filenames, and saves files to the download directory.
+
+        Args:
+            response (scrapy.http.Response): Response containing file data and headers
+
+        Note:
+            Files are saved in the download_folder directory with sanitized names
+            and appropriate extensions based on content type.
+        """
+
+        # Extract filename from headers
+        content_disposition = response.headers.get("Content-Disposition", b"").decode()
+        file_name = None
+
+        if "filename=" in content_disposition:
+            file_name = re.search(
+                r'filename\*?=["\']?(?:UTF-8\'\')?([^"\']+)', content_disposition
+            )
+            file_name = file_name.group(1) if file_name else None
+
+        # If filename is not found in headers, fall back to meta
+        if not file_name:
+            file_name = response.meta.get("file_name", "downloaded_file")
+
+        # Remove invalid characters (e.g., `/`, `\`, `:`, `?`)
         file_name = re.sub(r'[\\/:"*?<>|]', "_", file_name)
+
+        # Ensure correct file extension based on content type
+        content_type = response.headers.get("Content-Type", b"").decode()
+        if not os.path.splitext(file_name)[1]:  # If no extension in filename
+            ext = mimetypes.guess_extension(content_type.split(";")[0])
+            if ext:
+                file_name += ext
 
         file_path = os.path.join(self.download_folder, file_name)
 
@@ -130,28 +194,55 @@ class PipelinesSpider(scrapy.Spider):
         self.logger.info(f"Downloaded file: {file_path}")
 
     def _save_metadata(self):
-        """Write metadata to a JSON file."""
+        """
+        Save collected metadata to JSON file.
+
+        Writes the current state of self.metadata to the configured output file
+        in a formatted JSON structure with UTF-8 encoding.
+        """
+
         with open(self.output_json_file, "w", encoding="utf-8") as f:
             json.dump(self.metadata, f, indent=4)
         self.logger.info(f"Metadata saved to {self.output_json_file}")
 
     def _get_file_name(self, element, xpath_base):
-        """Helper method to join text and class attributes."""
+        """
+        Extract and combine text and class attributes for filename creation.
+
+        Args:
+            element (scrapy.Selector): Element containing the file information
+            xpath_base (str): Base XPath expression for finding text and class
+
+        Returns:
+            str: Combined filename from text and class attributes, joined with dots
+        """
         text = (element.xpath(f"{xpath_base}/text()").get() or "").strip()
         class_name = (element.xpath(f"{xpath_base}/@class").get() or "").strip()
         return ".".join(filter(None, [text, class_name]))
 
-    def _extract_link_args(self, js_link):
-        """Extracts arguments from WebForm_PostBackOptions or __doPostBack."""
-        if not js_link:
+    def _extract_link_args(self, js_code):
+        """
+        Extract arguments from JavaScript postback functions in links.
+
+        Parses both WebForm_PostBackOptions and __doPostBack JavaScript
+        function calls to extract their arguments.
+
+        Args:
+            js_code (str): JavaScript link containing postback function call
+
+        Returns:
+            list: Extracted and cleaned arguments from the JavaScript function
+                 Returns empty list if no arguments found
+        """
+        if not js_code:
             return []
 
         match = re.search(
             r"javascript:WebForm_DoPostBackWithOptions\(new WebForm_PostBackOptions\((.*)\)\)",
-            js_link,
+            js_code,
         )
         if not match:
-            match = re.search(r"javascript:__doPostBack\((.*)\)", js_link)
+            match = re.search(r"javascript:__doPostBack\((.*)\)", js_code)
 
         args = []
         if match:

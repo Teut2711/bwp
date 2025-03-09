@@ -10,3 +10,11 @@ class BwpItem(scrapy.Item):
     # define the fields for your item here like:
     # name = scrapy.Field()
     pass
+
+
+import re
+import scrapy
+
+
+class CheckSum(scrapy.Item):
+    value = scrapy.Field()
