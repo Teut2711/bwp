@@ -6,14 +6,22 @@
 import scrapy
 
 
-class BwpItem(scrapy.Item):
-    # define the fields for your item here like:
-    # name = scrapy.Field()
-    pass
+class PdfItem(scrapy.Item):
+    name = scrapy.Field()
+    link_args = scrapy.Field()
 
 
-import re
-import scrapy
+class ExcelItem(scrapy.Item):
+    name = scrapy.Field()
+    link_args = scrapy.Field()
+
+
+class PostingItem(scrapy.Item):
+    index = scrapy.Field()
+    posting_date = scrapy.Field()
+
+    pdf = scrapy.Field(serializer=PdfItem)
+    excel = scrapy.Field(serializer=ExcelItem)
 
 
 class CheckSum(scrapy.Item):

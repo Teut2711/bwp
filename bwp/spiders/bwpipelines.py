@@ -5,6 +5,8 @@ import scrapy
 import json
 import os
 
+from bwp.items import PostingItem, ExcelItem, PdfItem
+
 
 class BWPipelinesSpider(scrapy.Spider):
     """
@@ -29,27 +31,35 @@ class BWPipelinesSpider(scrapy.Spider):
     start_urls = [
         "https://infopost.bwpipelines.com/Posting/default.aspx?Mode=Display&Id=11&tspid=1"
     ]
-    output_json_file = "metadata.json"
-    download_folder = "downloads"
-    page_index = 1
+
+    custom_settings = {
+        "FEEDS": {
+            "bwpipeline.json": {
+                "format": "json",
+                "encoding": "utf8",
+                "store_empty": False,
+                "overwrite": True,
+            }
+        },
+        "DOWNLOAD_DELAY": 5,
+        "DOWNLOAD_DIR": "downloads",
+    }
 
     def __init__(self, from_page=2, to_page=3, *args, **kwargs):
         """
-        Initialize the spider with page range configuration and setup.
-
-        Args:
-            from_page (int, optional): Starting page number for crawling. Defaults to 2.
-            to_page (int, optional): Ending page number for crawling. Defaults to 3.
-            *args: Additional positional arguments passed to parent class
-            **kwargs: Additional keyword arguments passed to parent class
+        Initialize the spider with user-provided page range.
+        Default is from_page=2 to_page=3(excluded)
         """
         super().__init__(*args, **kwargs)
-        self.from_page = int(from_page) if from_page else 2
-        self.to_page = int(to_page) if to_page else 3
+        self.from_page = int(from_page)
+        self.to_page = int(to_page)
+        self.download_delay = self.custom_settings["DOWNLOAD_DELAY"]
+        self.download_folder = self.custom_settings["DOWNLOAD_DIR"]
 
-        os.makedirs(self.download_folder, exist_ok=True)
-
-        self.metadata = []
+    def start_requests(self):
+        start_page = 1
+        url = f"https://infopost.bwpipelines.com/Posting/default.aspx?Mode=Display&Id=11&tspid=1&page={start_page}"
+        yield scrapy.Request(url, callback=self.parse, meta={"page_number": start_page})
 
     def parse(self, response):
         """
@@ -64,6 +74,7 @@ class BWPipelinesSpider(scrapy.Spider):
         Yields:
             scrapy.FormRequest: Requests for file downloads and next page navigation
         """
+        page_number = response.meta.get("page_number", 1)
 
         hidden_inputs = response.xpath("//input[@type='hidden']")
         form_data = {
@@ -71,42 +82,45 @@ class BWPipelinesSpider(scrapy.Spider):
             for field in hidden_inputs
         }
 
-        if self.from_page <= self.page_index < self.to_page:
+        if self.from_page <= page_number < self.to_page:
             table_rows = response.xpath(
                 "//table[@id='dgITMatrix']/tr[starts-with(@id, 'dgITMatrix_')]"
             )
 
             for index, row in enumerate(table_rows, start=1):
                 pdf_link = row.xpath(".//td[1]//a/@href").get()
-                pdf_link = response.urljoin(pdf_link) if pdf_link else None
+                pdf_link = response.urljoin(pdf_link)
                 pdf_name = self._get_file_name(row, ".//td[1]//a")
 
-                upload_date = row.xpath(".//td[2]//text()").get()
-                upload_date = upload_date.strip() if upload_date else None
-
+                posting_date = row.xpath(".//td[2]//text()").get()
+                posting_date = posting_date.strip()
                 excel_link = row.xpath(".//td[3]//a/@href").get()
-                excel_link = response.urljoin(excel_link) if excel_link else None
+                excel_link = response.urljoin(excel_link)
                 excel_name = self._get_file_name(row, ".//td[3]//a")
 
                 pdf_args = self._extract_link_args(pdf_link)
                 excel_args = self._extract_link_args(excel_link)
-                entry = {
-                    "index": index,
-                    "pdf": {
-                        "name": pdf_name,
-                        "link_args": pdf_args,
-                    },
-                    "upload_date": upload_date,
-                    "excel": {
-                        "name": excel_name,
-                        "link_args": excel_args,
-                    },
-                }
 
-                self.metadata.append(entry)
+                pdf_item = PdfItem(
+                    name=pdf_name,
+                    link_args=pdf_args,
+                )
+                excel_name = response.meta["download_path"]
+
+                excel_item = ExcelItem(
+                    name=excel_name,
+                    link_args=excel_args,
+                )
+
+                item = PostingItem(
+                    index=index,
+                    posting_date=posting_date,
+                    pdf=pdf_item,
+                    excel=excel_item,
+                )
 
                 if excel_link:
-                    time.sleep(5)  # Enzforce 5-second delay before download
+                    time.sleep(self.settings.get("DOWNLOAD_DELAY"))
                     yield scrapy.FormRequest(
                         url=response.url,
                         formdata={
@@ -115,11 +129,10 @@ class BWPipelinesSpider(scrapy.Spider):
                             "__EVENTARGUMENT": excel_args[1],
                         },
                         callback=self._download_file,
-                        meta={"file_name": excel_name},
                     )
 
                 if pdf_link:
-                    time.sleep(5)  # Enforce 5-second delay before download
+                    time.sleep(self.settings.get("DOWNLOAD_DELAY"))
                     yield scrapy.FormRequest(
                         url=response.url,
                         formdata={
@@ -130,7 +143,10 @@ class BWPipelinesSpider(scrapy.Spider):
                         callback=self._download_file,
                         meta={"file_name": pdf_name},
                     )
-        self._save_metadata()
+                yield item
+                
+        if page_number >= self.to_page:
+            return
 
         next_page_href = response.xpath(
             "//table[@id='dgITMatrix']//tr[1]//a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'next')]/@href"
@@ -140,11 +156,11 @@ class BWPipelinesSpider(scrapy.Spider):
         form_data["__EVENTTARGET"] = next_page_args[0]
         form_data["__EVENTARGUMENT"] = next_page_args[1]
 
-        self.page_index += 1
         yield scrapy.FormRequest(
             url=response.url,
             formdata=form_data,
             callback=self.parse,
+            meta={"page_number": page_number + 1},
         )
 
     def _download_file(self, response):
@@ -162,7 +178,6 @@ class BWPipelinesSpider(scrapy.Spider):
             and appropriate extensions based on content type.
         """
 
-        # Extract filename from headers
         content_disposition = response.headers.get("Content-Disposition", b"").decode()
         file_name = None
 
@@ -172,16 +187,13 @@ class BWPipelinesSpider(scrapy.Spider):
             )
             file_name = file_name.group(1) if file_name else None
 
-        # If filename is not found in headers, fall back to meta
         if not file_name:
             file_name = response.meta.get("file_name", "downloaded_file")
 
-        # Remove invalid characters (e.g., `/`, `\`, `:`, `?`)
         file_name = re.sub(r'[\\/:"*?<>|]', "_", file_name)
 
-        # Ensure correct file extension based on content type
         content_type = response.headers.get("Content-Type", b"").decode()
-        if not os.path.splitext(file_name)[1]:  # If no extension in filename
+        if not os.path.splitext(file_name)[1]:
             ext = mimetypes.guess_extension(content_type.split(";")[0])
             if ext:
                 file_name += ext
@@ -192,18 +204,7 @@ class BWPipelinesSpider(scrapy.Spider):
             f.write(response.body)
 
         self.logger.info(f"Downloaded file: {file_path}")
-
-    def _save_metadata(self):
-        """
-        Save collected metadata to JSON file.
-
-        Writes the current state of self.metadata to the configured output file
-        in a formatted JSON structure with UTF-8 encoding.
-        """
-
-        with open(self.output_json_file, "w", encoding="utf-8") as f:
-            json.dump(self.metadata, f, indent=4)
-        self.logger.info(f"Metadata saved to {self.output_json_file}")
+        response.meta["download_path"] = file_path
 
     def _get_file_name(self, element, xpath_base):
         """
