@@ -1,7 +1,7 @@
 import re
 import scrapy
 
-from bwp.items import CheckSum
+from bwp.items import FercItem
 
 
 class FercSpider(scrapy.Spider):
@@ -64,7 +64,7 @@ class FercSpider(scrapy.Spider):
         ).get()
         if checksum:
 
-            yield CheckSum(value=checksum.strip("\r\n \"'"))  # may use itemloader
+            yield FercItem(checksum=checksum.strip("\r\n \"'"))  # may use itemloader
 
             self.log("Checksum saved")
 

@@ -97,3 +97,4 @@ ITEM_PIPELINES = {
 
 # Define the directory where the downloaded files will be stored
 FILES_STORE = "downloads"
+ALLOW_FILE_DOWNLOAD = False

@@ -24,5 +24,5 @@ class PostingItem(scrapy.Item):
     excel = scrapy.Field(serializer=ExcelItem)
 
 
-class CheckSum(scrapy.Item):
-    value = scrapy.Field()
+class FercItem(scrapy.Item):
+    checksum = scrapy.Field()

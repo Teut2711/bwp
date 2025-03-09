@@ -2,9 +2,9 @@ import mimetypes
 import re
 import time
 import scrapy
-import threading
 import os
 
+from bwp import settings
 from bwp.items import PostingItem, ExcelItem, PdfItem
 
 
@@ -12,18 +12,12 @@ class BWPipelinesSpider(scrapy.Spider):
     """
     Spider for scraping and downloading files from bwpipelines.com.
 
-    This spider crawls through paginated tables containing PDF and Excel files,
-    downloads them, and stores metadata in a JSON file. It handles pagination,
-    file downloads with proper delays, and maintains a structured record of all
-    downloaded content.
+    Scraps the second page by defaults
 
     Attributes:
         name (str): Identifier for the spider
         allowed_domains (list): List of domains the spider is allowed to crawl
         start_urls (list): Initial URL to begin crawling
-        output_json_file (str): Path where metadata JSON will be saved
-        download_folder (str): Directory where downloaded files are stored
-        page_index (int): Current page being processed
     """
 
     name = "bwpipelines"
@@ -31,7 +25,6 @@ class BWPipelinesSpider(scrapy.Spider):
     start_urls = [
         "https://infopost.bwpipelines.com/Posting/default.aspx?Mode=Display&Id=11&tspid=1"
     ]
-    excel_lock = threading.Lock()
 
     custom_settings = {
         "FEEDS": {
@@ -102,7 +95,7 @@ class BWPipelinesSpider(scrapy.Spider):
                 pdf_args = self._extract_link_args(pdf_link)
                 excel_args = self._extract_link_args(excel_link)
 
-                if excel_link:
+                if excel_link and settings.ALLOW_FILE_DOWNLOAD:
                     time.sleep(self.settings.get("DOWNLOAD_DELAY"))
                     excel_name = yield scrapy.FormRequest(
                         url=response.url,
@@ -114,7 +107,7 @@ class BWPipelinesSpider(scrapy.Spider):
                         callback=self._download_file,
                     )
 
-                if pdf_link:
+                if pdf_link and settings.ALLOW_FILE_DOWNLOAD:
                     time.sleep(self.settings.get("DOWNLOAD_DELAY"))
                     yield scrapy.FormRequest(
                         url=response.url,
