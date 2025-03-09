@@ -2,7 +2,7 @@ import mimetypes
 import re
 import time
 import scrapy
-import json
+import threading
 import os
 
 from bwp.items import PostingItem, ExcelItem, PdfItem
@@ -31,6 +31,7 @@ class BWPipelinesSpider(scrapy.Spider):
     start_urls = [
         "https://infopost.bwpipelines.com/Posting/default.aspx?Mode=Display&Id=11&tspid=1"
     ]
+    excel_lock = threading.Lock()
 
     custom_settings = {
         "FEEDS": {
@@ -101,27 +102,9 @@ class BWPipelinesSpider(scrapy.Spider):
                 pdf_args = self._extract_link_args(pdf_link)
                 excel_args = self._extract_link_args(excel_link)
 
-                pdf_item = PdfItem(
-                    name=pdf_name,
-                    link_args=pdf_args,
-                )
-                excel_name = response.meta["download_path"]
-
-                excel_item = ExcelItem(
-                    name=excel_name,
-                    link_args=excel_args,
-                )
-
-                item = PostingItem(
-                    index=index,
-                    posting_date=posting_date,
-                    pdf=pdf_item,
-                    excel=excel_item,
-                )
-
                 if excel_link:
                     time.sleep(self.settings.get("DOWNLOAD_DELAY"))
-                    yield scrapy.FormRequest(
+                    excel_name = yield scrapy.FormRequest(
                         url=response.url,
                         formdata={
                             **form_data,
@@ -143,8 +126,25 @@ class BWPipelinesSpider(scrapy.Spider):
                         callback=self._download_file,
                         meta={"file_name": pdf_name},
                     )
+
+                pdf_item = PdfItem(
+                    name=pdf_name,
+                    link_args=pdf_args,
+                )
+
+                excel_item = ExcelItem(
+                    name=excel_name,
+                    link_args=excel_args,
+                )
+
+                item = PostingItem(
+                    index=index,
+                    posting_date=posting_date,
+                    pdf=pdf_item,
+                    excel=excel_item,
+                )
                 yield item
-                
+
         if page_number >= self.to_page:
             return
 
@@ -204,7 +204,7 @@ class BWPipelinesSpider(scrapy.Spider):
             f.write(response.body)
 
         self.logger.info(f"Downloaded file: {file_path}")
-        response.meta["download_path"] = file_path
+        yield file_name
 
     def _get_file_name(self, element, xpath_base):
         """
